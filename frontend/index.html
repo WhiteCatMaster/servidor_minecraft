@@ -1,0 +1,673 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Minecraft Server Control Panel</title>
+    <style>
+        @import url('https://fonts.googleapis.com/css2?family=Press+Start+2P&family=Roboto+Mono:wght@400;700&display=swap');
+
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        body {
+            font-family: 'Roboto Mono', monospace;
+            background: #0a0e27;
+            background-image:
+                repeating-linear-gradient(0deg, transparent, transparent 2px, rgba(0, 255, 136, 0.03) 2px, rgba(0, 255, 136, 0.03) 4px),
+                repeating-linear-gradient(90deg, transparent, transparent 2px, rgba(0, 255, 136, 0.03) 2px, rgba(0, 255, 136, 0.03) 4px);
+            min-height: 100vh;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            color: #fff;
+            position: relative;
+            overflow: hidden;
+        }
+
+        /* Líneas de código flotando */
+        .code-line {
+            position: absolute;
+            font-family: 'Roboto Mono', monospace;
+            font-size: 12px;
+            color: rgba(0, 255, 136, 0.2);
+            white-space: nowrap;
+            animation: scroll-code 20s linear infinite;
+            pointer-events: none;
+        }
+
+        @keyframes scroll-code {
+            from {
+                transform: translateX(-100%);
+            }
+            to {
+                transform: translateX(100vw);
+            }
+        }
+
+        /* Efecto terminal scanlines */
+        .scanline {
+            position: fixed;
+            top: 0;
+            left: 0;
+            right: 0;
+            height: 100vh;
+            background: linear-gradient(
+                to bottom,
+                transparent 50%,
+                rgba(0, 255, 136, 0.02) 50%
+            );
+            background-size: 100% 4px;
+            pointer-events: none;
+            z-index: 1000;
+        }
+
+        .container {
+            background: #0d1117;
+            border: 4px solid #30363d;
+            padding: 40px;
+            max-width: 700px;
+            width: 90%;
+            box-shadow:
+                0 0 0 2px #00ff88,
+                8px 8px 0 rgba(0, 0, 0, 0.8),
+                0 0 40px rgba(0, 255, 136, 0.3);
+            position: relative;
+            z-index: 10;
+        }
+
+        .terminal-bar {
+            background: #161b22;
+            padding: 10px 15px;
+            margin: -40px -40px 30px -40px;
+            border-bottom: 2px solid #30363d;
+            display: flex;
+            align-items: center;
+            gap: 8px;
+        }
+
+        .terminal-dot {
+            width: 12px;
+            height: 12px;
+            border-radius: 50%;
+        }
+
+        .dot-close { background: #ff5f56; }
+        .dot-minimize { background: #ffbd2e; }
+        .dot-maximize { background: #27c93f; }
+
+        .terminal-title {
+            margin-left: auto;
+            font-size: 12px;
+            color: #8b949e;
+        }
+
+        h1 {
+            font-family: 'Press Start 2P', cursive;
+            font-size: 1.4em;
+            text-align: center;
+            margin-bottom: 10px;
+            color: #00ff88;
+            text-shadow:
+                2px 2px 0 #000,
+                0 0 10px rgba(0, 255, 136, 0.5);
+            letter-spacing: 2px;
+        }
+
+        .subtitle {
+            text-align: center;
+            font-size: 11px;
+            color: #8b949e;
+            margin-bottom: 30px;
+            font-family: 'Roboto Mono', monospace;
+        }
+
+        .subtitle::before {
+            content: '> ';
+            color: #00ff88;
+        }
+
+        .server-status {
+            background: #161b22;
+            border: 3px solid #30363d;
+            padding: 20px;
+            margin-bottom: 30px;
+            text-align: center;
+            font-size: 13px;
+            position: relative;
+            box-shadow: inset 0 2px 4px rgba(0, 0, 0, 0.5);
+        }
+
+        .server-status::before {
+            content: '';
+            position: absolute;
+            top: 0;
+            left: 0;
+            right: 0;
+            height: 2px;
+            background: repeating-linear-gradient(
+                90deg,
+                #00ff88 0px, #00ff88 10px,
+                transparent 10px, transparent 20px
+            );
+        }
+
+        .status-line {
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            gap: 15px;
+            margin-bottom: 10px;
+        }
+
+        .status-indicator {
+            display: inline-block;
+            width: 16px;
+            height: 16px;
+            position: relative;
+            image-rendering: pixelated;
+        }
+
+        .status-indicator.running {
+            background: #00ff88;
+            box-shadow: 0 0 0 3px #00aa5e, 3px 3px 0 3px #000;
+            animation: blink 1.5s steps(2) infinite;
+        }
+
+        .status-indicator.stopped {
+            background: #ff3838;
+            box-shadow: 0 0 0 3px #aa0000, 3px 3px 0 3px #000;
+        }
+
+        .status-indicator.unknown {
+            background: #ffa500;
+            box-shadow: 0 0 0 3px #cc6600, 3px 3px 0 3px #000;
+        }
+
+        @keyframes blink {
+            0%, 100% { opacity: 1; }
+            50% { opacity: 0.4; }
+        }
+
+        .status-text {
+            font-family: 'Press Start 2P', cursive;
+            font-size: 11px;
+        }
+
+        .stats-grid {
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 10px;
+            margin-top: 15px;
+            font-size: 10px;
+        }
+
+        .stat-item {
+            background: #0d1117;
+            padding: 8px;
+            border: 2px solid #30363d;
+            text-align: left;
+        }
+
+        .stat-label {
+            color: #8b949e;
+            display: block;
+            margin-bottom: 4px;
+        }
+
+        .stat-value {
+            color: #00ff88;
+            font-weight: bold;
+            font-family: 'Press Start 2P', cursive;
+            font-size: 9px;
+        }
+
+        .controls {
+            display: flex;
+            gap: 15px;
+            justify-content: center;
+            flex-wrap: wrap;
+            margin-bottom: 20px;
+        }
+
+        button {
+            font-family: 'Press Start 2P', cursive;
+            font-size: 11px;
+            padding: 18px 28px;
+            border: 3px solid;
+            cursor: pointer;
+            transition: all 0.1s;
+            position: relative;
+            text-transform: uppercase;
+            background: #161b22;
+            color: #fff;
+            box-shadow: 5px 5px 0 rgba(0, 0, 0, 0.8);
+        }
+
+        button::before {
+            content: '';
+            position: absolute;
+            top: 0;
+            left: 0;
+            right: 0;
+            height: 25%;
+            background: rgba(255, 255, 255, 0.1);
+        }
+
+        button::after {
+            content: attr(data-key);
+            position: absolute;
+            top: -20px;
+            left: 50%;
+            transform: translateX(-50%);
+            font-size: 8px;
+            color: #8b949e;
+            white-space: nowrap;
+        }
+
+        button:active {
+            transform: translate(3px, 3px);
+            box-shadow: 2px 2px 0 rgba(0, 0, 0, 0.8);
+        }
+
+        .start-btn {
+            border-color: #00ff88;
+            color: #00ff88;
+        }
+
+        .start-btn:hover {
+            background: #00ff88;
+            color: #0d1117;
+            transform: translateY(-2px);
+            box-shadow: 5px 7px 0 rgba(0, 0, 0, 0.8);
+        }
+
+        .stop-btn {
+            border-color: #ff3838;
+            color: #ff3838;
+        }
+
+        .stop-btn:hover {
+            background: #ff3838;
+            color: #0d1117;
+            transform: translateY(-2px);
+            box-shadow: 5px 7px 0 rgba(0, 0, 0, 0.8);
+        }
+
+        .refresh-btn {
+            border-color: #58a6ff;
+            color: #58a6ff;
+        }
+
+        .refresh-btn:hover {
+            background: #58a6ff;
+            color: #0d1117;
+            transform: translateY(-2px);
+            box-shadow: 5px 7px 0 rgba(0, 0, 0, 0.8);
+        }
+
+        button:disabled {
+            opacity: 0.3;
+            cursor: not-allowed;
+            transform: none !important;
+        }
+
+        .console {
+            background: #000;
+            border: 3px solid #30363d;
+            padding: 15px;
+            font-family: 'Roboto Mono', monospace;
+            font-size: 11px;
+            color: #00ff88;
+            height: 120px;
+            overflow-y: auto;
+            box-shadow: inset 0 2px 8px rgba(0, 0, 0, 0.8);
+        }
+
+        .console-line {
+            margin-bottom: 5px;
+            display: flex;
+            gap: 10px;
+        }
+
+        .console-time {
+            color: #8b949e;
+            flex-shrink: 0;
+        }
+
+        .console-text {
+            color: #00ff88;
+        }
+
+        .console-text.error {
+            color: #ff3838;
+        }
+
+        .console-text.success {
+            color: #00ff88;
+        }
+
+        .console-text.info {
+            color: #58a6ff;
+        }
+
+        .console::-webkit-scrollbar {
+            width: 10px;
+        }
+
+        .console::-webkit-scrollbar-track {
+            background: #0d1117;
+        }
+
+        .console::-webkit-scrollbar-thumb {
+            background: #30363d;
+        }
+
+        .console::after {
+            content: '█';
+            animation: cursor-blink 1s steps(2) infinite;
+        }
+
+        @keyframes cursor-blink {
+            0%, 100% { opacity: 1; }
+            50% { opacity: 0; }
+        }
+
+        .footer {
+            margin-top: 20px;
+            text-align: center;
+            font-size: 9px;
+            color: #8b949e;
+            padding-top: 15px;
+            border-top: 1px solid #30363d;
+        }
+
+        .footer-icon {
+            display: inline-block;
+            margin: 0 5px;
+            color: #00ff88;
+        }
+    </style>
+</head>
+<body>
+    <div class="scanline"></div>
+
+    <script>
+        const codeSnippets = [
+            'import minecraft.server',
+            'def start_server():',
+            'if __name__ == "__main__":',
+            'subprocess.Popen()',
+            'server.status = "running"',
+            'GPIO.setup(17, GPIO.IN)',
+            'uvicorn.run(app)',
+            '@app.get("/status")',
+            'return {"status": "ok"}',
+            'while True: process()',
+        ];
+
+        for(let i = 0; i < 8; i++) {
+            const line = document.createElement('div');
+            line.className = 'code-line';
+            line.textContent = codeSnippets[Math.floor(Math.random() * codeSnippets.length)];
+            line.style.top = Math.random() * 100 + '%';
+            line.style.animationDelay = Math.random() * 20 + 's';
+            line.style.animationDuration = (15 + Math.random() * 10) + 's';
+            document.body.appendChild(line);
+        }
+    </script>
+
+    <div class="container">
+        <div class="terminal-bar">
+            <div class="terminal-dot dot-close"></div>
+            <div class="terminal-dot dot-minimize"></div>
+            <div class="terminal-dot dot-maximize"></div>
+            <span class="terminal-title">minecraft_server_control.sh</span>
+        </div>
+
+        <h1>MINECRAFT SERVER</h1>
+        <div class="subtitle">Control Panel v1.0.0</div>
+
+        <div class="server-status">
+            <div class="status-line">
+                <span class="status-indicator" id="statusIndicator"></span>
+                <span class="status-text" id="statusText">LOADING...</span>
+            </div>
+
+            <div class="stats-grid">
+                <div class="stat-item">
+                    <span class="stat-label">UPTIME</span>
+                    <span class="stat-value" id="uptime">--:--:--</span>
+                </div>
+                <div class="stat-item">
+                    <span class="stat-label">LAST CHECK</span>
+                    <span class="stat-value" id="lastCheck">--:--:--</span>
+                </div>
+                <div class="stat-item">
+                    <span class="stat-label">API STATUS</span>
+                    <span class="stat-value" id="apiStatus">CHECKING...</span>
+                </div>
+                <div class="stat-item">
+                    <span class="stat-label">REQUESTS</span>
+                    <span class="stat-value" id="requests">0</span>
+                </div>
+            </div>
+        </div>
+
+        <div class="controls">
+            <button class="start-btn" id="startBtn" onclick="startServer()" data-key="[S]">
+                ▶ Start
+            </button>
+            <button class="stop-btn" id="stopBtn" onclick="stopServer()" data-key="[X]">
+                ■ Stop
+            </button>
+            <button class="refresh-btn" id="refreshBtn" onclick="checkStatus()" data-key="[R]">
+                ⟳ Refresh
+            </button>
+        </div>
+
+        <div class="console" id="console">
+            <div class="console-line">
+                <span class="console-time">[00:00:00]</span>
+                <span class="console-text info">System initialized...</span>
+            </div>
+        </div>
+
+        <div class="footer">
+            <span class="footer-icon">⚡</span>
+            Powered by FastAPI + Raspberry Pi
+            <span class="footer-icon">⚡</span>
+        </div>
+    </div>
+
+    <script>
+        // Cambia esta URL por la IP de tu Raspberry Pi si no está siendo servido por la API
+        const API_URL = ''; // Usar ruta relativa
+        let requestCount = 0;
+        let currentUptimeSeconds = 0;
+        let uptimeInterval = null;
+
+        function addConsoleLog(message, type = 'info') {
+            const console = document.getElementById('console');
+            const time = new Date().toLocaleTimeString('es-ES', { hour12: false });
+            const line = document.createElement('div');
+            line.className = 'console-line';
+            line.innerHTML = `
+                <span class="console-time">[${time}]</span>
+                <span class="console-text ${type}">${message}</span>
+            `;
+            console.appendChild(line);
+            console.scrollTop = console.scrollHeight;
+
+            // Mantener solo últimas 20 líneas
+            while (console.children.length > 20) {
+                console.removeChild(console.firstChild);
+            }
+        }
+
+        function formatUptime(totalSeconds) {
+            const hours = Math.floor(totalSeconds / 3600);
+            const minutes = Math.floor((totalSeconds % 3600) / 60);
+            const seconds = Math.floor(totalSeconds % 60);
+            return `${String(hours).padStart(2, '0')}:${String(minutes).padStart(2, '0')}:${String(seconds).padStart(2, '0')}`;
+        }
+
+        function updateUptimeDisplay() {
+            if (currentUptimeSeconds > 0) {
+                document.getElementById('uptime').textContent = formatUptime(currentUptimeSeconds);
+                currentUptimeSeconds++; // Incrementamos cada segundo
+            } else {
+                document.getElementById('uptime').textContent = '--:--:--';
+            }
+        }
+
+        function updateStats() {
+            const now = new Date().toLocaleTimeString('es-ES', { hour12: false });
+            document.getElementById('lastCheck').textContent = now;
+            document.getElementById('requests').textContent = requestCount;
+        }
+
+        async function checkStatus() {
+            try {
+                requestCount++;
+                addConsoleLog('Checking server status...', 'info');
+
+                const response = await fetch(`${API_URL}/status`);
+                const data = await response.json();
+
+                updateStatus(data.status);
+
+                currentUptimeSeconds = data.uptime_seconds || 0;
+                if (data.status === 'running' && !uptimeInterval) {
+                    // Solo iniciar el contador si está corriendo y no estaba activo
+                    uptimeInterval = setInterval(updateUptimeDisplay, 1000);
+                } else if (data.status === 'stopped') {
+                    // Detener el contador si está parado
+                    if (uptimeInterval) clearInterval(uptimeInterval);
+                    uptimeInterval = null;
+                }
+
+                updateStats();
+
+                document.getElementById('apiStatus').textContent = 'ONLINE';
+                addConsoleLog(`Server status: ${data.status.toUpperCase()}`, 'success');
+            } catch (error) {
+                addConsoleLog('Connection error: API Offline', 'error');
+                updateStatus('unknown');
+                document.getElementById('apiStatus').textContent = 'OFFLINE';
+                if (uptimeInterval) clearInterval(uptimeInterval);
+                uptimeInterval = null;
+                currentUptimeSeconds = 0;
+            }
+        }
+
+        async function startServer() {
+            setButtonsDisabled(true);
+            addConsoleLog('Executing start command...', 'info');
+
+            try {
+                requestCount++;
+                const response = await fetch(`${API_URL}/start`, {
+                    method: 'POST'
+                });
+                const data = await response.json();
+
+                addConsoleLog(data.message, data.status === 'running' ? 'success' : 'error');
+
+                if (data.status === 'running' && !uptimeInterval) {
+                    // Reajustar el uptime en caso de éxito y empezar a contar
+                    currentUptimeSeconds = 1;
+                    uptimeInterval = setInterval(updateUptimeDisplay, 1000);
+                }
+
+                setTimeout(checkStatus, 1000); // Reconfirmar estado rápidamente
+            } catch (error) {
+                addConsoleLog('Failed to start server: ' + error.message, 'error');
+            } finally {
+                setButtonsDisabled(false);
+            }
+        }
+
+        async function stopServer() {
+            setButtonsDisabled(true);
+            addConsoleLog('Executing stop command...', 'info');
+
+            try {
+                requestCount++;
+                const response = await fetch(`${API_URL}/stop`, {
+                    method: 'POST'
+                });
+                const data = await response.json();
+
+                addConsoleLog(data.message, data.status === 'stopped' ? 'success' : 'error');
+
+                if (uptimeInterval) clearInterval(uptimeInterval);
+                uptimeInterval = null;
+                currentUptimeSeconds = 0;
+
+                setTimeout(checkStatus, 1000); // Reconfirmar estado rápidamente
+            } catch (error) {
+                addConsoleLog('Failed to stop server: ' + error.message, 'error');
+            } finally {
+                setButtonsDisabled(false);
+            }
+        }
+
+        function updateStatus(status) {
+            const statusIndicator = document.getElementById('statusIndicator');
+            const statusText = document.getElementById('statusText');
+
+            statusIndicator.className = 'status-indicator';
+
+            if (status === 'running') {
+                statusIndicator.classList.add('running');
+                statusText.textContent = 'RUNNING';
+                statusText.style.color = '#00ff88';
+            } else if (status === 'stopped') {
+                statusIndicator.classList.add('stopped');
+                statusText.textContent = 'STOPPED';
+                statusText.style.color = '#ff3838';
+            } else {
+                statusIndicator.classList.add('unknown');
+                statusText.textContent = 'UNKNOWN';
+                statusText.style.color = '#ffa500';
+            }
+        }
+
+        function setButtonsDisabled(disabled) {
+            document.getElementById('startBtn').disabled = disabled;
+            document.getElementById('stopBtn').disabled = disabled;
+            document.getElementById('refreshBtn').disabled = disabled;
+        }
+
+        // Atajos de teclado
+        document.addEventListener('keydown', (e) => {
+            if (e.key === 's' || e.key === 'S') {
+                e.preventDefault();
+                startServer();
+            } else if (e.key === 'x' || e.key === 'X') {
+                e.preventDefault();
+                stopServer();
+            } else if (e.key === 'r' || e.key === 'R') {
+                e.preventDefault();
+                checkStatus();
+            }
+        });
+
+        // Inicialización
+        addConsoleLog('Initializing connection to API...', 'info');
+        checkStatus();
+
+        // Tareas periódicas
+        setInterval(() => {
+            checkStatus();
+            updateStats();
+        }, 10000); // Chequeo de estado cada 10 segundos
+
+        updateStats();
+    </script>
+</body>
+</html>
