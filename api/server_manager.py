@@ -1,12 +1,13 @@
 # api/server_manager.py
 
-from gpiozero import LED, Button, Device
-from gpiozero.pins.mock import MockFactory
+import threading
+import time
+import os
 import subprocess
 import signal
-import os
-import time
-import threading # IMPORTANTE: Para evitar choques entre botón y web
+from multiprocessing import Process, Queue # <--- REQUISITO: Procesos y Colas
+from gpiozero import LED, Button, Device
+from gpiozero.pins.mock import MockFactory
 
 # --- CONFIGURACIÓN ---
 PIN_LED_SCRIPT_ACTIVO = 16
@@ -14,200 +15,199 @@ PIN_LED_SERVER_STATUS = 17
 PIN_BUTTON = 26
 
 SERVER_JAR = "paper-1.21.10-113.jar"
-
-# --- RUTAS ---
 SERVER_DIR = os.path.dirname(os.path.abspath(__file__))
 MINECRAFT_SERVER_PATH = os.path.join(SERVER_DIR, "..", "..", "minecraft_server", SERVER_JAR)
 MINECRAFT_CWD = os.path.join(SERVER_DIR, "..", "..", "minecraft_server")
 SERVER_COMMAND = ["java", "-Xmx512M", "-Xms128M", "-jar", MINECRAFT_SERVER_PATH, "nogui"]
 
-# Variables Globales
+# --- VARIABLES GLOBALES ---
 server_process = None
 server_start_time = None
-
-# CANDADO DE SEGURIDAD
-# Evita que el botón y la web intenten encender el servidor al mismo milisegundo
-server_lock = threading.Lock()
-
-# --- INICIALIZACIÓN ROBUSTA DE GPIO ---
 led_activo = None
-led_status = None
 button = None
 GPIO_OK = False
 
-def setup_gpio_objects():
-    """Configura los objetos GPIO con fallback a simulación."""
-    global led_activo, led_status, button, GPIO_OK
+# --- REQUISITO: COLA DE COMUNICACIÓN ENTRE PROCESOS ---
+# Usaremos esta cola para mandar mensajes "ON", "OFF", "BLINK" al Proceso 2
+led_queue = Queue()
+
+# ==============================================================================
+#  PROCESO 2: CONTROLADOR VISUAL INDEPENDIENTE (Process)
+#  (Cumple el requisito de: "Al menos 2 procesos implementados")
+# ==============================================================================
+def led_process_target(queue, pin_led):
+    """
+    Este es un PROCESO separado.
+    Su única misión es controlar el LED de estado sin bloquear al resto.
+    """
+    # IMPORTANTE: En un nuevo proceso, hay que re-inicializar el objeto LED
+    # porque los objetos de hardware no pasan de un proceso a otro.
+    try:
+        my_led = LED(pin_led)
+    except:
+        Device.pin_factory = MockFactory()
+        my_led = LED(pin_led)
+        
+    print(f"PROCESS [PID {os.getpid()}]: Iniciado controlador de luces.")
+    
+    current_mode = "OFF" # Modos: OFF, ON, BLINK
+    
+    while True:
+        # 1. Mirar si hay órdenes nuevas en la cola (sin bloquear)
+        if not queue.empty():
+            command = queue.get()
+            current_mode = command
+
+        # 2. Ejecutar la acción según el modo
+        if current_mode == "ON":
+            my_led.on()
+            time.sleep(0.1)
+        elif current_mode == "OFF":
+            my_led.off()
+            time.sleep(0.1)
+        elif current_mode == "BLINK":
+            my_led.toggle()
+            time.sleep(0.5) # Velocidad del parpadeo
+            
+# ==============================================================================
+#  HILO 2: LECTOR DE CONSOLA (Thread)
+#  (Cumple el requisito de: "Al menos 2 hilos implementados")
+# ==============================================================================
+def console_reader_thread(proc):
+    """
+    Este HILO lee lo que escupe el servidor de Minecraft para detectar
+    cuándo ha terminado de cargar ("Done!").
+    """
+    print("THREAD: Iniciando monitor de consola...")
+    while True:
+        # Leemos línea a línea lo que dice Java
+        output = proc.stdout.readline()
+        
+        # Si el proceso muere, salimos
+        if output == '' and proc.poll() is not None:
+            break
+            
+        if output:
+            line = output.strip()
+            # print(f"MINECRAFT: {line}") # Descomentar para depurar
+            
+            # Si Java dice "Done!", es que ya cargó el mundo
+            if "Done" in line:
+                print("THREAD: ¡Servidor cargado al 100%!")
+                # REQUISITO: Sincronización (Hilo avisa a Proceso vía Cola)
+                led_queue.put("ON") 
+
+# ==============================================================================
+#  LÓGICA PRINCIPAL (PROCESO 1)
+# ==============================================================================
+
+def setup_gpio_main():
+    """Configura el botón y el LED de sistema (solo para el proceso principal)."""
+    global led_activo, button, GPIO_OK
+    try:
+        led_activo = LED(PIN_LED_SCRIPT_ACTIVO)
+        button = Button(PIN_BUTTON)
+        button.when_pressed = toggle_server_interface
+        led_activo.on()
+        GPIO_OK = True
+    except:
+        Device.pin_factory = MockFactory()
+        led_activo = LED(PIN_LED_SCRIPT_ACTIVO)
+        button = Button(PIN_BUTTON)
+        button.when_pressed = toggle_server_interface
+        GPIO_OK = True
+
+def init_system():
+    """Arranca todo el sistema."""
+    setup_gpio_main()
+    
+    # 1. ARRANCAR EL PROCESO DEL LED (Proceso Secundario)
+    p_led = Process(target=led_process_target, args=(led_queue, PIN_LED_SERVER_STATUS))
+    p_led.daemon = True # Se cierra si el principal se cierra
+    p_led.start()
+    
+    print(f"MAIN [PID {os.getpid()}]: Sistema iniciado.")
+
+def start_server():
+    global server_process, server_start_time
+    
+    if get_server_status() == "running": return True
+    
+    print("MAIN: Iniciando servidor...")
+    
+    # 1. Mandar mensaje a la cola para que el OTRO PROCESO parpadee
+    led_queue.put("BLINK")
     
     try:
-        # Intento 1: Hardware Real
-        led_activo = LED(PIN_LED_SCRIPT_ACTIVO)
-        led_status = LED(PIN_LED_SERVER_STATUS)
-        button = Button(PIN_BUTTON)
-        GPIO_OK = True
-        print("✅ Hardware GPIO detectado.")
+        server_process = subprocess.Popen(
+            SERVER_COMMAND, cwd=MINECRAFT_CWD, 
+            stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True
+        )
+        server_start_time = time.time()
+        
+        # 2. ARRANCAR EL HILO DE MONITORIZACIÓN (Hilo Secundario)
+        monitor = threading.Thread(target=console_reader_thread, args=(server_process,))
+        monitor.daemon = True
+        monitor.start()
+        
+        return True
     except Exception as e:
-        print(f"⚠️  No se detectó hardware GPIO nativo: {e}")
-        print("🔄 Activando MODO SIMULACIÓN (MockFactory)...")
-        try:
-            Device.pin_factory = MockFactory()
-            led_activo = LED(PIN_LED_SCRIPT_ACTIVO)
-            led_status = LED(PIN_LED_SERVER_STATUS)
-            button = Button(PIN_BUTTON)
-            GPIO_OK = True # Marcamos como OK para que la lógica funcione (aunque sea simulada)
-            print("✅ Simulación cargada correctamente.")
-        except Exception as e2:
-            print(f"❌ Error crítico GPIO: {e2}")
-            GPIO_OK = False
+        print(f"Error: {e}")
+        led_queue.put("OFF")
+        return False
 
-# Llamamos a la configuración de objetos al importar
-setup_gpio_objects()
-
-# --- Funciones de control de Servidor ---
+def stop_server():
+    global server_process, server_start_time
+    
+    if get_server_status() == "stopped": return True
+    
+    print("MAIN: Deteniendo servidor...")
+    led_queue.put("BLINK") # Parpadear mientras cierra
+    
+    try:
+        if server_process:
+            server_process.stdin.write("stop\n")
+            server_process.stdin.flush()
+            # Esperamos un poco a que guarde
+            try:
+                server_process.wait(timeout=20)
+            except subprocess.TimeoutExpired:
+                server_process.terminate()
+        
+    except:
+        if server_process: server_process.terminate()
+        
+    server_process = None
+    server_start_time = None
+    led_queue.put("OFF") # Apagar LED cuando termine
+    return True
 
 def get_server_status():
-    global server_process
-    # Comprobamos si el proceso existe y sigue vivo (poll es None si sigue vivo)
     if server_process and server_process.poll() is None:
         return "running"
     return "stopped"
-
-def is_java_installed():
-    try:
-        subprocess.run(['java', '-version'], check=True, capture_output=True)
-        return True
-    except (subprocess.CalledProcessError, FileNotFoundError):
-        return False
-
-def start_server():
-    """Inicia el servidor de Minecraft (Thread-safe)."""
-    global server_process, server_start_time
-    
-    # Usamos el candado para que nadie más entre aquí mientras procesamos
-    with server_lock:
-        if get_server_status() == "running":
-            print("El servidor ya está corriendo.")
-            return True
-
-        print("Iniciando servidor de Minecraft...")
-        try:
-            if not is_java_installed():
-                print("ERROR: Java no encontrado.")
-                return False
-
-            server_process = subprocess.Popen(
-                SERVER_COMMAND,
-                cwd=MINECRAFT_CWD,
-                stdin=subprocess.PIPE,
-                stdout=subprocess.PIPE,
-                stderr=subprocess.PIPE,
-                text=True
-            )
-            server_start_time = time.time()
-            
-            if GPIO_OK and led_status:
-                led_status.on() # LED ON
-                
-            return True
-        except Exception as e:
-            print(f"ERROR al iniciar servidor: {e}")
-            return False
-
-def stop_server():
-    """Detiene el servidor de Minecraft (Thread-safe)."""
-    global server_process, server_start_time
-    
-    with server_lock:
-        if get_server_status() == "stopped":
-            print("El servidor ya está detenido.")
-            return True
-
-        print("Deteniendo servidor de Minecraft...")
-        try:
-            if server_process:
-                # Enviamos comando stop a la consola de Minecraft
-                server_process.stdin.write("stop\n")
-                server_process.stdin.flush()
-                
-                # Esperamos hasta 30 segundos
-                try:
-                    server_process.wait(timeout=30)
-                except subprocess.TimeoutExpired:
-                    print("Forzando cierre...")
-                    server_process.terminate()
-                    server_process.wait()
-
-            server_process = None
-            server_start_time = None
-            
-            if GPIO_OK and led_status:
-                led_status.off() # LED OFF
-                
-            return True
-        except Exception as e:
-            print(f"Error al detener: {e}")
-            return False
 
 def get_uptime():
     if server_start_time and get_server_status() == "running":
         return int(time.time() - server_start_time)
     return 0
 
-# --- LÓGICA DEL BOTÓN ---
-def toggle_server_from_button():
-    """Esta función se ejecuta al presionar el botón físico."""
-    print("\n🔘 Botón presionado detectado.")
-    
-    # No necesitamos bloquear aquí porque start_server y stop_server ya tienen el candado
-    status = get_server_status()
-    
-    if status == "stopped":
-        print("🔘 Acción: Encender servidor.")
+def toggle_server_interface():
+    """Función para el botón físico"""
+    print("🔘 Botón presionado.")
+    if get_server_status() == "stopped":
         start_server()
-    elif status == "running":
-        print("🔘 Acción: Apagar servidor.")
+    else:
         stop_server()
 
-# --- GESTIÓN GPIO ---
+def cleanup():
+    if GPIO_OK and led_activo: 
+        led_activo.close()
 
-def init_gpio():
-    """Inicializa estado y vincula el botón."""
-    if GPIO_OK:
-        try:
-            # 1. Encender LED de "Script Activo"
-            if led_activo: 
-                led_activo.on()
-            
-            # 2. Sincronizar LED de estado con el estado real del servidor
-            if led_status:
-                if get_server_status() == "running":
-                    led_status.on()
-                else:
-                    led_status.off()
-
-            # 3. VINCULAR EL BOTÓN A LA FUNCIÓN (MAGIA AQUÍ)
-            if button:
-                # when_pressed ejecuta la función en un hilo aparte
-                button.when_pressed = toggle_server_from_button
-                print(f"✅ Botón (Pin {PIN_BUTTON}) vinculado y escuchando...")
-                
-        except Exception as e:
-            print(f"Advertencia GPIO: {e}")
-    else:
-        print("⚠️ Ejecutando sin control GPIO.")
-
-def cleanup_gpio():
-    """Apaga los LEDs al salir."""
-    if GPIO_OK:
-        try:
-            if led_activo: led_activo.off()
-            if led_status: led_status.off()
-            print("GPIO limpiado.")
-        except:
-            pass
-
-# Si ejecutas este archivo directamente (para pruebas)
+# Si ejecutas este archivo directamente (para pruebas manuales)
 if __name__ == "__main__":
-    init_gpio()
-    print("Modo prueba manual. Presiona CTRL+C para salir.")
-    signal.pause()
+    init_system()
+    try:
+        while True: time.sleep(1)
+    except KeyboardInterrupt:
+        cleanup()
